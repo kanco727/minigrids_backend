@@ -1,3 +1,4 @@
+# app/routers/minigrid.py
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,18 +12,11 @@ from .. import models, schemas
 
 router = APIRouter(prefix="/minigrids", tags=["minigrids"])
 
-
 # =====================================================
-# ✅ 1️⃣ Liste complète avec coordonnées et infos site
+# ✅ Liste complète avec coordonnées et infos site
 # =====================================================
-@router.get("/geo", summary="Liste des minigrids avec coordonnées et données simulées")
+@router.get("/geo", summary="Liste des mini-grids avec coordonnées et données simulées")
 async def list_minigrids_geo(db: AsyncSession = Depends(get_db)):
-    """
-    Retourne toutes les mini-grids avec :
-    - coordonnées GPS
-    - nom + statut
-    - données simulées (production, batterie, température, utilisateurs)
-    """
     query = text("""
         SELECT 
             m.id,
@@ -32,16 +26,14 @@ async def list_minigrids_geo(db: AsyncSession = Depends(get_db)):
             s.localite AS site_localite,
             ST_Y(s.point::geometry) AS latitude,
             ST_X(s.point::geometry) AS longitude,
-            ST_AsText(s.point) AS site_point_wkt
+            (s.point IS NOT NULL) AS has_location
         FROM mini_grid m
         JOIN site s ON s.id = m.site_id
-        WHERE s.point IS NOT NULL
-        ORDER BY m.id DESC
+        ORDER BY m.id DESC;
     """)
 
     rows = (await db.execute(query)).mappings().all()
 
-    # Simuler des données dynamiques (jusqu’à connexion des vrais capteurs)
     results = []
     for r in rows:
         results.append({
@@ -52,21 +44,18 @@ async def list_minigrids_geo(db: AsyncSession = Depends(get_db)):
             "localite": r["site_localite"],
             "latitude": r["latitude"],
             "longitude": r["longitude"],
-            "site_point_wkt": r["site_point_wkt"],
-
-            # 💡 Données simulées
+            "has_location": r["has_location"],
             "production_kw": round(uniform(10.0, 150.0), 2),
             "batterie_soc": randint(40, 100),
             "temperature": round(uniform(25.0, 40.0), 1),
             "utilisateurs_actifs": randint(10, 80),
             "statut_reseau": "normal" if randint(0, 4) else "alerte"
         })
-
     return results
 
 
 # =====================================================
-# ✅ 2️⃣ Liste simple
+# ✅ Liste simple
 # =====================================================
 @router.get("/", response_model=List[schemas.MiniGridRead])
 async def list_minigrids(db: AsyncSession = Depends(get_db)):
@@ -76,19 +65,11 @@ async def list_minigrids(db: AsyncSession = Depends(get_db)):
 
 
 # =====================================================
-# ✅ 3️⃣ Création d’un mini-grid (corrigé)
+# ✅ Création d’un mini-grid
 # =====================================================
 @router.post("/", response_model=schemas.MiniGridRead, summary="Créer un mini-grid")
-async def create_minigrid(
-    payload: schemas.MiniGridCreate,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Crée une nouvelle mini-grid.
-    Vérifie qu’aucune autre mini-grid ne porte le même nom.
-    """
+async def create_minigrid(payload: schemas.MiniGridCreate, db: AsyncSession = Depends(get_db)):
     try:
-        # Vérification doublon par nom
         existing = await db.execute(select(models.MiniGrid).where(models.MiniGrid.nom == payload.nom))
         if existing.scalar_one_or_none():
             raise HTTPException(status_code=400, detail="Une mini-grid avec ce nom existe déjà.")
@@ -109,3 +90,21 @@ async def create_minigrid(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Erreur serveur : {str(e)}")
+
+
+# =====================================================
+# ✅ Mise à jour du statut (PATCH)
+# =====================================================
+@router.patch("/{id}/statut", summary="Mettre à jour le statut d'une mini-grid")
+async def update_minigrid_statut(id: int, statut: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(models.MiniGrid).where(models.MiniGrid.id == id))
+    mg = result.scalar_one_or_none()
+    if not mg:
+        raise HTTPException(status_code=404, detail="Mini-grid non trouvée")
+
+    mg.statut = statut
+    mg.maj_le = datetime.utcnow()
+
+    await db.commit()
+    await db.refresh(mg)
+    return {"id": mg.id, "statut": mg.statut, "message": f"Statut mis à jour à '{statut}'"}

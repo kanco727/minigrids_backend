@@ -20,9 +20,7 @@ async def list_tickets(
     priorite: str | None = Query(None),
     db: AsyncSession = Depends(get_db)
 ):
-    """Liste les tickets de maintenance avec filtres optionnels"""
     stmt = select(models.MaintenanceTicket).order_by(models.MaintenanceTicket.id.desc())
-
     if minigrid_id is not None:
         stmt = stmt.where(models.MaintenanceTicket.minigrid_id == minigrid_id)
     if statut is not None:
@@ -31,7 +29,6 @@ async def list_tickets(
         stmt = stmt.where(models.MaintenanceTicket.priorite == priorite)
 
     rows = (await db.execute(stmt)).scalars().all()
-    # ✅ conversion ORM → Pydantic
     return [schemas.MaintenanceTicketRead.from_orm(r) for r in rows]
 
 
@@ -40,7 +37,6 @@ async def list_tickets(
 # ============================================================
 @router.post("/tickets", response_model=schemas.MaintenanceTicketRead)
 async def create_ticket(payload: schemas.MaintenanceTicketCreate, db: AsyncSession = Depends(get_db)):
-    """Création d’un nouveau ticket depuis le frontend"""
     try:
         data = payload.dict(exclude_unset=True)
         data["date_creation"] = datetime.utcnow()
@@ -59,7 +55,6 @@ async def create_ticket(payload: schemas.MaintenanceTicketCreate, db: AsyncSessi
         await db.commit()
         await db.refresh(obj)
         return schemas.MaintenanceTicketRead.from_orm(obj)
-
     except HTTPException:
         raise
     except Exception as e:
@@ -197,3 +192,19 @@ async def dashboard_maintenance(db: AsyncSession = Depends(get_db)):
         "haute_priorite": len([t for t in tickets if t.priorite == "haute"]),
         "par_minigrid": list(par_minigrid.values())
     }
+
+
+# ============================================================
+# ✅ 9️⃣ Récupérer un ticket précis (pour la page /statistiques)
+# ============================================================
+@router.get("/tickets/{ticket_id}", response_model=schemas.MaintenanceTicketRead)
+async def get_ticket(ticket_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    Récupère les informations détaillées d’un ticket spécifique.
+    Utilisé par la page /statistiques pour afficher le rapport.
+    """
+    obj = await db.get(models.MaintenanceTicket, ticket_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail=f"Ticket #{ticket_id} introuvable.")
+
+    return schemas.MaintenanceTicketRead.from_orm(obj)

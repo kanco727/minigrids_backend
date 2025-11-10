@@ -9,19 +9,22 @@ class MiniGridBase(BaseModel):
     nom: str
     statut: Optional[str] = None
 
-# 🔹 Pour la création
+# 🔹 Création
 class MiniGridCreate(MiniGridBase):
     pass
 
-# 🔹 Pour la mise à jour
-class MiniGridUpdate(MiniGridBase):
-    pass
+# 🔹 Mise à jour (patch)
+class MiniGridUpdate(BaseModel):
+    statut: Optional[str] = None
+    nom: Optional[str] = None
+    site_id: Optional[int] = None
 
-# 🔹 Pour la lecture (ce que FastAPI renvoie)
+    model_config = ConfigDict(from_attributes=True)
+
+# 🔹 Lecture
 class MiniGridRead(MiniGridBase):
     id: int
     cree_le: Optional[datetime] = None
     maj_le: Optional[datetime] = None
 
-    # ✅ Nouvelle configuration Pydantic v2
     model_config = ConfigDict(from_attributes=True)
