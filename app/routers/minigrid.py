@@ -12,11 +12,17 @@ from .. import models, schemas
 
 router = APIRouter(prefix="/minigrids", tags=["minigrids"])
 
-# =====================================================
-# ✅ Liste complète avec coordonnées et infos site
-# =====================================================
+
+# Liste complète avec coordonnées et infos site
+
 @router.get("/geo", summary="Liste des mini-grids avec coordonnées et données simulées")
 async def list_minigrids_geo(db: AsyncSession = Depends(get_db)):
+    """
+    Retourne toutes les mini-grids avec :
+    - coordonnées GPS (si disponibles)
+    - indicateur de localisation (has_location)
+    - données simulées (production, batterie, température, utilisateurs)
+    """
     query = text("""
         SELECT 
             m.id,
@@ -45,18 +51,20 @@ async def list_minigrids_geo(db: AsyncSession = Depends(get_db)):
             "latitude": r["latitude"],
             "longitude": r["longitude"],
             "has_location": r["has_location"],
+            # Données simulées
             "production_kw": round(uniform(10.0, 150.0), 2),
             "batterie_soc": randint(40, 100),
             "temperature": round(uniform(25.0, 40.0), 1),
             "utilisateurs_actifs": randint(10, 80),
             "statut_reseau": "normal" if randint(0, 4) else "alerte"
         })
+
     return results
 
 
-# =====================================================
-# ✅ Liste simple
-# =====================================================
+
+#  Liste simple
+
 @router.get("/", response_model=List[schemas.MiniGridRead])
 async def list_minigrids(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(models.MiniGrid).order_by(models.MiniGrid.id.desc()))
@@ -64,9 +72,9 @@ async def list_minigrids(db: AsyncSession = Depends(get_db)):
     return [schemas.MiniGridRead.from_orm(r) for r in rows]
 
 
-# =====================================================
-# ✅ Création d’un mini-grid
-# =====================================================
+
+# Création d’un mini-grid
+
 @router.post("/", response_model=schemas.MiniGridRead, summary="Créer un mini-grid")
 async def create_minigrid(payload: schemas.MiniGridCreate, db: AsyncSession = Depends(get_db)):
     try:
@@ -90,21 +98,3 @@ async def create_minigrid(payload: schemas.MiniGridCreate, db: AsyncSession = De
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Erreur serveur : {str(e)}")
-
-
-# =====================================================
-# ✅ Mise à jour du statut (PATCH)
-# =====================================================
-@router.patch("/{id}/statut", summary="Mettre à jour le statut d'une mini-grid")
-async def update_minigrid_statut(id: int, statut: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(models.MiniGrid).where(models.MiniGrid.id == id))
-    mg = result.scalar_one_or_none()
-    if not mg:
-        raise HTTPException(status_code=404, detail="Mini-grid non trouvée")
-
-    mg.statut = statut
-    mg.maj_le = datetime.utcnow()
-
-    await db.commit()
-    await db.refresh(mg)
-    return {"id": mg.id, "statut": mg.statut, "message": f"Statut mis à jour à '{statut}'"}

@@ -1,6 +1,7 @@
 # app/models/__init__.py
 from ..db import Base
 
+
 from .utilisateur import Utilisateur
 from .projet import Projet
 from .site import Site
@@ -10,9 +11,11 @@ from .equipement_minigrid import EquipementMinigrid
 from .alerte_minigrid import AlerteMinigrid
 from .maintenance_ticket import MaintenanceTicket
 from .statistique import Statistique
-
 from .mesure_minigrid import MesureMinigrid
 from .notification_minigrid import NotificationMinigrid
+from .equipement_event import EquipementEvent
+
+
 
 __all__ = [
     "Base",
@@ -27,4 +30,5 @@ __all__ = [
     "Statistique",
     "MesureMinigrid",
     "NotificationMinigrid",
+    "MaintenancePlan"
 ]

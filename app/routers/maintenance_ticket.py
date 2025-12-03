@@ -1,210 +1,236 @@
-# app/routers/maintenance_ticket.py
-from typing import List
+from typing import List, Optional
+from datetime import datetime, timezone, timedelta
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from datetime import datetime
-from ..db import get_db
+
+from ..db import get_db, AsyncSessionLocal
 from .. import models, schemas
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
 
 
-# ============================================================
-# ✅ 1️⃣ Lister tous les tickets
-# ============================================================
+# Helpers
+
+STATUTS = {"ouvert", "en_cours", "rapport_envoye", "termine"}
+ALLOWED_TRANSITIONS = {
+    "ouvert": {"en_cours"},
+    "en_cours": {"rapport_envoye"},
+    "rapport_envoye": {"termine"},
+    "termine": set(),
+}
+
+
+def _ensure_statut_transition(current: str, new: str):
+    if new not in ALLOWED_TRANSITIONS.get(current, set()):
+        raise HTTPException(
+            400,
+            f"Transition interdite: '{current}' → '{new}'. "
+            f"Autorisé: {', '.join(ALLOWED_TRANSITIONS[current]) or 'aucune'}"
+        )
+
+
+async def _notify(db: AsyncSession, message: str, destinataire: str = "superviseur"):
+    notif = models.NotificationMinigrid(
+        message=message,
+        type="alert",
+        destinataire=destinataire,
+        est_lu=False,
+    )
+    db.add(notif)
+    await db.commit()
+
+
+
+#  Payloads spécifiques
+
+class AssignPayload(BaseModel):
+    assigne_a: int
+    commentaire: Optional[str] = None
+
+
+class ReportPayload(BaseModel):
+    rapport: str
+    rapport_fichier: Optional[str] = None
+
+
+class ValidatePayload(BaseModel):
+    valide_par: int
+
+
+
+#  Liste des tickets
+
 @router.get("/tickets", response_model=List[schemas.MaintenanceTicketRead])
 async def list_tickets(
-    minigrid_id: int | None = Query(None),
-    statut: str | None = Query(None),
-    priorite: str | None = Query(None),
-    db: AsyncSession = Depends(get_db)
+    statut: Optional[str] = Query(None),
+    priorite: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(models.MaintenanceTicket).order_by(models.MaintenanceTicket.id.desc())
-    if minigrid_id is not None:
-        stmt = stmt.where(models.MaintenanceTicket.minigrid_id == minigrid_id)
-    if statut is not None:
+    stmt = select(models.MaintenanceTicket)
+    if statut:
         stmt = stmt.where(models.MaintenanceTicket.statut == statut)
-    if priorite is not None:
+    if priorite:
         stmt = stmt.where(models.MaintenanceTicket.priorite == priorite)
 
+    stmt = stmt.order_by(desc(models.MaintenanceTicket.date_creation))
     rows = (await db.execute(stmt)).scalars().all()
-    return [schemas.MaintenanceTicketRead.from_orm(r) for r in rows]
+    return [schemas.MaintenanceTicketRead.model_validate(r) for r in rows]
 
 
-# ============================================================
-# ✅ 2️⃣ Créer un ticket
-# ============================================================
+
+#  Création d’un ticket
+
 @router.post("/tickets", response_model=schemas.MaintenanceTicketRead)
 async def create_ticket(payload: schemas.MaintenanceTicketCreate, db: AsyncSession = Depends(get_db)):
-    try:
-        data = payload.dict(exclude_unset=True)
-        data["date_creation"] = datetime.utcnow()
-        data["statut"] = data.get("statut", "ouvert")
-        data["description"] = (data.get("description") or "").strip()
+    data = payload.model_dump(exclude_unset=True)
+    data["date_creation"] = datetime.now(timezone.utc)
+    data["statut"] = data.get("statut", "ouvert")
+    data["priorite"] = data.get("priorite", "normale")
 
-        if not data.get("type"):
-            raise HTTPException(400, "Le type de ticket est obligatoire.")
-        if not data.get("description"):
-            raise HTTPException(400, "La description du ticket est obligatoire.")
-        if not data.get("minigrid_id"):
-            raise HTTPException(400, "Une mini-grid doit être sélectionnée.")
+    if not data.get("description"):
+        raise HTTPException(400, "Description requise.")
 
-        obj = models.MaintenanceTicket(**data)
-        db.add(obj)
-        await db.commit()
-        await db.refresh(obj)
-        return schemas.MaintenanceTicketRead.from_orm(obj)
-    except HTTPException:
-        raise
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Erreur création ticket: {str(e)}")
-
-
-# ============================================================
-# ✅ 3️⃣ Mise à jour générique
-# ============================================================
-@router.patch("/tickets/{ticket_id}", response_model=schemas.MaintenanceTicketRead)
-async def update_ticket(ticket_id: int, payload: dict = None, db: AsyncSession = Depends(get_db)):
-    obj = await db.get(models.MaintenanceTicket, ticket_id)
-    if not obj:
-        raise HTTPException(404, "Ticket introuvable")
-    if not payload:
-        raise HTTPException(400, "Aucune donnée fournie")
-
-    for k, v in payload.items():
-        if hasattr(obj, k):
-            setattr(obj, k, v)
-
+    obj = models.MaintenanceTicket(**data)
+    db.add(obj)
     await db.commit()
     await db.refresh(obj)
-    return schemas.MaintenanceTicketRead.from_orm(obj)
+
+    await _notify(db, f"🆕 Nouveau ticket '{obj.titre or obj.description[:30]}' créé.")
+    return schemas.MaintenanceTicketRead.model_validate(obj)
 
 
-# ============================================================
-# ✅ 4️⃣ Assigner un ticket
-# ============================================================
+
+#  Assignation
+
 @router.patch("/tickets/{ticket_id}/assigner", response_model=schemas.MaintenanceTicketRead)
-async def assigner_ticket(ticket_id: int, assigne_a: int, db: AsyncSession = Depends(get_db)):
+async def assigner_ticket(ticket_id: int, payload: AssignPayload, db: AsyncSession = Depends(get_db)):
     obj = await db.get(models.MaintenanceTicket, ticket_id)
     if not obj:
         raise HTTPException(404, "Ticket introuvable")
-    if obj.statut in ["termine", "rapport_envoye"]:
-        raise HTTPException(400, "Ticket déjà terminé, impossible de réassigner.")
 
-    obj.assigne_a = assigne_a
-    obj.statut = "en_cours"
+    obj.assigne_a = payload.assigne_a
+    if obj.statut == "ouvert":
+        obj.statut = "en_cours"
 
     await db.commit()
     await db.refresh(obj)
-    return schemas.MaintenanceTicketRead.from_orm(obj)
+    await _notify(db, f"👷 Ticket #{obj.id} assigné à {obj.assigne_a}")
+    return schemas.MaintenanceTicketRead.model_validate(obj)
 
 
-# ============================================================
-# ✅ 5️⃣ Clôturer un ticket
-# ============================================================
-@router.patch("/tickets/{ticket_id}/cloturer", response_model=schemas.MaintenanceTicketRead)
-async def cloturer_ticket(ticket_id: int, rapport: str, db: AsyncSession = Depends(get_db)):
+
+#  Envoi du rapport
+
+@router.patch("/tickets/{ticket_id}/report", response_model=schemas.MaintenanceTicketRead)
+async def envoyer_rapport(ticket_id: int, payload: ReportPayload, db: AsyncSession = Depends(get_db)):
     obj = await db.get(models.MaintenanceTicket, ticket_id)
     if not obj:
         raise HTTPException(404, "Ticket introuvable")
-    if obj.statut != "en_cours":
-        raise HTTPException(400, "Le ticket n'est pas en cours.")
-    if not rapport or len(rapport.strip()) < 5:
+    if not payload.rapport or len(payload.rapport.strip()) < 5:
         raise HTTPException(400, "Le rapport doit être fourni.")
 
-    obj.rapport = rapport.strip()
+    _ensure_statut_transition(obj.statut, "rapport_envoye")
+    obj.rapport = payload.rapport.strip()
+    obj.rapport_fichier = payload.rapport_fichier
     obj.statut = "rapport_envoye"
 
     await db.commit()
     await db.refresh(obj)
-    return schemas.MaintenanceTicketRead.from_orm(obj)
+    await _notify(db, f"📄 Rapport envoyé pour ticket #{obj.id}")
+    return schemas.MaintenanceTicketRead.model_validate(obj)
 
 
-# ============================================================
-# ✅ 6️⃣ Validation finale
-# ============================================================
+
+#  Validation (ADMIN SEULEMENT)
+
 @router.patch("/tickets/{ticket_id}/valider", response_model=schemas.MaintenanceTicketRead)
-async def valider_ticket(ticket_id: int, valide_par: int, db: AsyncSession = Depends(get_db)):
+async def valider_ticket(ticket_id: int, payload: ValidatePayload, db: AsyncSession = Depends(get_db)):
     obj = await db.get(models.MaintenanceTicket, ticket_id)
     if not obj:
         raise HTTPException(404, "Ticket introuvable")
-    if obj.statut != "rapport_envoye":
-        raise HTTPException(400, "Ticket non prêt à être validé.")
 
-    obj.valide_par = valide_par
+    user = await db.get(models.Utilisateur, payload.valide_par)
+    if not user:
+        raise HTTPException(404, "Utilisateur introuvable")
+    if user.role != "admin":
+        raise HTTPException(403, "Seul un administrateur peut valider ce ticket.")
+
+    _ensure_statut_transition(obj.statut, "termine")
+    obj.valide_par = payload.valide_par
     obj.statut = "termine"
 
     await db.commit()
     await db.refresh(obj)
-    return schemas.MaintenanceTicketRead.from_orm(obj)
+    await _notify(db, f"✅ Ticket #{obj.id} validé par {user.nom}")
+    return schemas.MaintenanceTicketRead.model_validate(obj)
 
 
-# ============================================================
-# ✅ 7️⃣ Supprimer un ticket
-# ============================================================
-@router.delete("/tickets/{ticket_id}")
-async def delete_ticket(ticket_id: int, db: AsyncSession = Depends(get_db)):
-    obj = await db.get(models.MaintenanceTicket, ticket_id)
-    if not obj:
-        raise HTTPException(404, "Ticket introuvable")
+#  Dashboard (résumé)
 
-    await db.delete(obj)
-    await db.commit()
-    return {"deleted": ticket_id}
-
-
-# ============================================================
-# ✅ 8️⃣ Statistiques globales
-# ============================================================
 @router.get("/dashboard")
 async def dashboard_maintenance(db: AsyncSession = Depends(get_db)):
-    stmt = select(models.MaintenanceTicket)
-    tickets = (await db.execute(stmt)).scalars().all()
+    tickets = (await db.execute(select(models.MaintenanceTicket))).scalars().all()
+    total = len(tickets)
+    if total == 0:
+        return {"total": 0, "ouverts": 0, "en_cours": 0, "rapport_envoye": 0, "termines": 0, "urgents": 0, "mttr_h": 0}
 
-    if not tickets:
-        return {
-            "total": 0, "ouverts": 0, "en_cours": 0, "rapport_envoye": 0,
-            "termines": 0, "urgents": 0, "haute_priorite": 0, "par_minigrid": []
-        }
-
-    par_minigrid = {}
-    for t in tickets:
-        key = t.minigrid_id or "Inconnu"
-        if key not in par_minigrid:
-            par_minigrid[key] = {"minigrid_id": t.minigrid_id, "total": 0, "ouverts": 0, "en_cours": 0, "termines": 0}
-        par_minigrid[key]["total"] += 1
-        if t.statut == "ouvert":
-            par_minigrid[key]["ouverts"] += 1
-        elif t.statut == "en_cours":
-            par_minigrid[key]["en_cours"] += 1
-        elif t.statut in ["rapport_envoye", "termine"]:
-            par_minigrid[key]["termines"] += 1
+    ouverts = sum(1 for t in tickets if t.statut == "ouvert")
+    en_cours = sum(1 for t in tickets if t.statut == "en_cours")
+    rapport_envoye = sum(1 for t in tickets if t.statut == "rapport_envoye")
+    termines = sum(1 for t in tickets if t.statut == "termine")
+    urgents = sum(1 for t in tickets if t.priorite == "urgente")
 
     return {
-        "total": len(tickets),
-        "ouverts": len([t for t in tickets if t.statut == "ouvert"]),
-        "en_cours": len([t for t in tickets if t.statut == "en_cours"]),
-        "rapport_envoye": len([t for t in tickets if t.statut == "rapport_envoye"]),
-        "termines": len([t for t in tickets if t.statut == "termine"]),
-        "urgents": len([t for t in tickets if t.priorite == "urgente"]),
-        "haute_priorite": len([t for t in tickets if t.priorite == "haute"]),
-        "par_minigrid": list(par_minigrid.values())
+        "total": total,
+        "ouverts": ouverts,
+        "en_cours": en_cours,
+        "rapport_envoye": rapport_envoye,
+        "termines": termines,
+        "urgents": urgents,
     }
 
 
-# ============================================================
-# ✅ 9️⃣ Récupérer un ticket précis (pour la page /statistiques)
-# ============================================================
-@router.get("/tickets/{ticket_id}", response_model=schemas.MaintenanceTicketRead)
-async def get_ticket(ticket_id: int, db: AsyncSession = Depends(get_db)):
-    """
-    Récupère les informations détaillées d’un ticket spécifique.
-    Utilisé par la page /statistiques pour afficher le rapport.
-    """
-    obj = await db.get(models.MaintenanceTicket, ticket_id)
-    if not obj:
-        raise HTTPException(status_code=404, detail=f"Ticket #{ticket_id} introuvable.")
 
-    return schemas.MaintenanceTicketRead.from_orm(obj)
+#  Vérification automatique des maintenances préventives
+
+async def verifier_maintenances_periodiques():
+    """Tâche planifiée qui vérifie chaque jour les maintenances préventives à exécuter."""
+    while True:
+        async with AsyncSessionLocal() as db:
+            now = datetime.now(timezone.utc)
+            stmt = select(models.MaintenanceTicket).where(
+                models.MaintenanceTicket.type == "préventive",
+                models.MaintenanceTicket.frequence_jours.isnot(None),
+                models.MaintenanceTicket.prochaine_execution.isnot(None),
+                models.MaintenanceTicket.prochaine_execution <= now,
+            )
+            plans = (await db.execute(stmt)).scalars().all()
+
+            for plan in plans:
+                nouveau = models.MaintenanceTicket(
+                    titre=f"Exécution planifiée : {plan.titre or plan.description[:40]}",
+                    description=plan.description,
+                    type="préventive",
+                    priorite=plan.priorite or "normale",
+                    minigrid_id=plan.minigrid_id,
+                    assigne_a=plan.assigne_a,
+                    cree_par=plan.cree_par,
+                    date_creation=now,
+                    statut="ouvert",
+                )
+                db.add(nouveau)
+                plan.prochaine_execution = now + timedelta(days=plan.frequence_jours)
+                await _notify(db, f"🛠 Nouvelle exécution automatique du plan '{plan.titre}'")
+
+            if plans:
+                await db.commit()
+
+        await asyncio.sleep(86400)  # exécution toutes les 24h
+
+
+# Lancer la tâche planifiée au démarrage
+asyncio.create_task(verifier_maintenances_periodiques())

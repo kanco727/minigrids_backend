@@ -6,12 +6,13 @@ from .equipement_type import *
 from .equipement_minigrid import *
 from .alerte_minigrid import *
 from .maintenance_ticket import *
-
 from .statistique import *
-
 from .notification_minigrid import*
-
 from . import auth 
+from .equipement_event import EquipementEventCreate, EquipementEventRead
+
+
+
 
 __all__ = [
     "UtilisateurBase","UtilisateurCreate","UtilisateurUpdate","UtilisateurRead",
@@ -23,4 +24,7 @@ __all__ = [
     "AlerteMinigridBase","AlerteMinigridCreate","AlerteMinigridUpdate","AlerteMinigridRead",
     "MaintenanceTicketBase","MaintenanceTicketCreate","MaintenanceTicketUpdate","MaintenanceTicketRead",
     "StatistiqueBase","StatistiqueCreate","StatistiqueUpdate","StatistiqueRead",
+    "EquipementEventCreate",
+    "EquipementEventRead",
+
 ]

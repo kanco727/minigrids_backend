@@ -7,7 +7,8 @@ from .routers import (
     alerte_minigrid, maintenance_ticket,
     statistique, utilisateur, parametre,
     notification_minigrid, simulation, monitoring,
-    auth  )
+    auth, equipement_event)
+
 
 app = FastAPI(title="Écosystème Mini-Grid API", version="1.0.0")
 
@@ -46,6 +47,7 @@ app.include_router(parametre.router)
 app.include_router(notification_minigrid.router)
 app.include_router(simulation.router)
 app.include_router(monitoring.router)
+app.include_router(equipement_event.router)
 
 from .routers import auth  
 

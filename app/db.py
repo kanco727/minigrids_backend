@@ -5,11 +5,10 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 from dotenv import load_dotenv
 
-load_dotenv()  # charge .env si présent
-
+load_dotenv()  
 DB_USER = os.getenv("DB_USER", "minigrid")
 DB_PASSWORD_RAW = os.getenv("DB_PASSWORD", "Marie1995")
-DB_PASSWORD = quote_plus(DB_PASSWORD_RAW)  # encodage sécurisé
+DB_PASSWORD = quote_plus(DB_PASSWORD_RAW)  
 DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
 DB_PORT = os.getenv("DB_PORT", "5433")
 DB_NAME = os.getenv("DB_NAME", "minigrid_db")

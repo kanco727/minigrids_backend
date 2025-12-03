@@ -5,8 +5,8 @@ from pydantic import BaseModel, ConfigDict
 class SiteBase(BaseModel):
     projet_id: Optional[int] = None
     localite: Optional[str] = None
-    point_wkt: Optional[str] = None  # "POINT(lon lat)"
-    zone_wkt: Optional[str]  = None  # "POLYGON((...))"
+    point_wkt: Optional[str] = None  
+    zone_wkt: Optional[str]  = None  
     score_acces: Optional[int] = None
     niveau_securite: Optional[str] = None
     population_estimee: Optional[int] = None

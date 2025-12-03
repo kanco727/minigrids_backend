@@ -1,30 +1,46 @@
-# app/schemas/alerte_minigrid.py
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel
 
-# ---------- Modèles CRUD standards ----------
+
+# ---------- Base ----------
 class AlerteMinigridBase(BaseModel):
     minigrid_id: Optional[int] = None
     type_alerte: Optional[str] = None
     niveau: Optional[str] = None
     message: Optional[str] = None
+    statut: Optional[str] = None
     time_stamp: Optional[datetime] = None
 
+
+# ---------- CRUD ----------
 class AlerteMinigridCreate(AlerteMinigridBase):
-    pass
+    categorie: Optional[str] = None
+    valeur_mesuree: Optional[float] = None
+    seuil_declenchement: Optional[float] = None
+    origine: Optional[str] = "automatique"
+
 
 class AlerteMinigridUpdate(AlerteMinigridBase):
-    pass
+    commentaire: Optional[str] = None
+    responsable_id: Optional[int] = None
+
 
 class AlerteMinigridRead(AlerteMinigridBase):
     id: int
+    categorie: Optional[str] = None
+    valeur_mesuree: Optional[float] = None
+    seuil_declenchement: Optional[float] = None
+    origine: Optional[str] = None
+    responsable_id: Optional[int] = None
+    commentaire: Optional[str] = None
+    time_resolution: Optional[datetime] = None
 
     class Config:
-        orm_mode = True  # nécessaire avec Pydantic v1 pour sérialiser des objets SQLAlchemy
+        from_attributes = True
 
 
-# ---------- Modèle pour l’endpoint /alertes/full (avec nom de minigrid) ----------
+# ---------- Liste complète avec nom de mini-grid ----------
 class AlerteMinigridListItem(BaseModel):
     id: int
     minigrid_id: int
@@ -32,4 +48,42 @@ class AlerteMinigridListItem(BaseModel):
     type_alerte: Optional[str] = None
     niveau: Optional[str] = None
     message: Optional[str] = None
+    statut: Optional[str] = None
     time_stamp: Optional[datetime] = None
+
+
+# ---------- Historique / timeline ----------
+class AlerteHistoriqueRead(BaseModel):
+    id: int
+    alerte_id: int
+    action: str
+    acteur_id: Optional[int]
+    details: Optional[str]
+    time_action: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AlerteHistoriqueCreate(BaseModel):
+    action: str
+    acteur_id: Optional[int] = None
+    details: Optional[str] = None
+
+
+# ---------- Actions complémentaires ----------
+class AlerteAssignPayload(BaseModel):
+    responsable_id: int
+    commentaire: Optional[str] = None
+
+
+class AlerteCommentPayload(BaseModel):
+    commentaire: str
+
+
+# ---------- Statistiques ----------
+class AlerteStats(BaseModel):
+    total: int
+    critiques: int
+    resolues: int
+    temps_resolution_h: Optional[float] = None

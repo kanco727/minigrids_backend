@@ -2,13 +2,14 @@ from sqlalchemy import Column, BigInteger, Text, DateTime, ForeignKey, text
 from sqlalchemy.orm import relationship
 from ..db import Base
 
+
 class MaintenanceTicket(Base):
     __tablename__ = "maintenance_ticket"
 
-    # === Identifiants ===
+    #  Identifiants 
     id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
 
-    # === Liens vers les entités associées ===
+    # Liens vers les entités associées 
     minigrid_id = Column(
         BigInteger,
         ForeignKey("mini_grid.id", ondelete="SET NULL"),
@@ -20,7 +21,8 @@ class MaintenanceTicket(Base):
         nullable=True
     )
 
-    # === Informations principales ===
+    #  Informations principales 
+    titre = Column(Text, nullable=True)
     type = Column(Text, nullable=False, server_default=text("'corrective'"))
     description = Column(Text, nullable=True)
     priorite = Column(Text, nullable=False, server_default=text("'normale'"))
@@ -28,18 +30,22 @@ class MaintenanceTicket(Base):
     # Statut du ticket : ouvert, en_cours, rapport_envoye, termine
     statut = Column(Text, nullable=False, server_default=text("'ouvert'"))
 
-    # === Dates et rapports ===
+    #  Planification (préventive) 
+    frequence_jours = Column(BigInteger, nullable=True)  # nombre de jours entre 2 exécutions
+    prochaine_execution = Column(DateTime(timezone=True), nullable=True)
+
+    # Dates et rapports 
     date_creation = Column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()")  # auto timestamp à la création
+        server_default=text("now()")
     )
 
     # Rapport du technicien
-    rapport = Column(Text, nullable=True)  # texte explicatif
-    rapport_fichier = Column(Text, nullable=True)  # lien ou chemin vers fichier joint (PDF, docx, etc.)
+    rapport = Column(Text, nullable=True)
+    rapport_fichier = Column(Text, nullable=True)
 
-    # === Suivi des utilisateurs ===
+    # Suivi des utilisateurs 
     cree_par = Column(
         BigInteger,
         ForeignKey("utilisateur.id", ondelete="SET NULL"),
@@ -56,7 +62,7 @@ class MaintenanceTicket(Base):
         nullable=True
     )
 
-    # === Relations ORM ===
+    # Relations ORM 
     alerte = relationship("AlerteMinigrid", back_populates="ticket", lazy="selectin")
     minigrid = relationship("MiniGrid", lazy="selectin")
 
@@ -81,6 +87,6 @@ class MaintenanceTicket(Base):
 
     def __repr__(self):
         return (
-            f"<MaintenanceTicket(id={self.id}, statut='{self.statut}', "
+            f"<MaintenanceTicket(id={self.id}, titre='{self.titre}', statut='{self.statut}', "
             f"type='{self.type}', priorite='{self.priorite}', minigrid_id={self.minigrid_id})>"
         )

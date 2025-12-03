@@ -4,7 +4,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict
 
 
-# 🔹 Modèle de base
+#  Modèle de base
 class NotificationMinigridBase(BaseModel):
     alerte_id: Optional[int] = None
     message: str
@@ -13,15 +13,15 @@ class NotificationMinigridBase(BaseModel):
     est_lu: Optional[bool] = False
 
 
-# 🔹 Création
+#  Création
 class NotificationMinigridCreate(NotificationMinigridBase):
     pass
 
 
-# 🔹 Lecture (réponse API)
+#  Lecture (réponse API)
 class NotificationMinigridRead(NotificationMinigridBase):
     id: int
     cree_le: Optional[datetime] = None
 
-    # ✅ Compatible Pydantic v2
+    #  Compatible Pydantic v2
     model_config = ConfigDict(from_attributes=True)

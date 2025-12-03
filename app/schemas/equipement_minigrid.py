@@ -27,4 +27,4 @@ class EquipementMinigridOut(EquipementMinigridBase):
     maj_le: Optional[datetime] = None
 
     class Config:
-        orm_mode = True  # important : permet à FastAPI de convertir les objets SQLAlchemy
+        orm_mode = True  

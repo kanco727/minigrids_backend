@@ -8,9 +8,9 @@ from datetime import datetime, timedelta
 
 router = APIRouter(prefix="/simulate", tags=["simulation"])
 
-# ==========================================================
-# 🧩 1️⃣ SIMULATION DES MESURES ET ALERTES
-# ==========================================================
+
+#  SIMULATION DES MESURES ET ALERTES
+
 @router.post("/cycle")
 async def simulate_cycle(db: AsyncSession = Depends(get_db)):
     """
@@ -28,7 +28,7 @@ async def simulate_cycle(db: AsyncSession = Depends(get_db)):
         puissance_w = round(voltage * courant, 2)
         temperature = round(random.uniform(20, 60), 1)
 
-        # 🔍 Trouver un équipement associé
+        # Trouver un équipement associé
         equipement = (await db.execute(
             select(models.EquipementMinigrid)
             .where(models.EquipementMinigrid.minigrid_id == mg.id)
@@ -41,7 +41,7 @@ async def simulate_cycle(db: AsyncSession = Depends(get_db)):
                 continue
             equip_id = equipement_defaut.id
 
-        # 🔹 Créer la mesure
+        #  Créer la mesure
         mesure = models.MesureMinigrid(
             equip_id=equip_id,
             minigrid_id=mg.id,
@@ -54,7 +54,7 @@ async def simulate_cycle(db: AsyncSession = Depends(get_db)):
         db.add(mesure)
         await db.flush()
 
-        # 🔸 Détection d’anomalies
+        #  Détection d’anomalies
         alerts = []
         if temperature > 50:
             alerts.append(("Température critique", f"{temperature} °C"))
@@ -93,9 +93,9 @@ async def simulate_cycle(db: AsyncSession = Depends(get_db)):
     await db.commit()
     return {"cycle": datetime.utcnow(), "resultats": results}
 
-# ==========================================================
-# 🧠 2️⃣ ENDPOINTS DE MONITORING (UTILISÉS PAR LE DASHBOARD)
-# ==========================================================
+
+#  ENDPOINTS DE MONITORING (UTILISÉS PAR LE DASHBOARD)
+
 
 @router.get("/monitoring/{mg_id}/kpis")
 async def get_monitoring_kpis(mg_id: int, db: AsyncSession = Depends(get_db)):
@@ -120,9 +120,9 @@ async def get_monitoring_kpis(mg_id: int, db: AsyncSession = Depends(get_db)):
         "timestamp": datetime.utcnow().isoformat()
     }
 
-# ==========================================================
-# 🔋 3️⃣ COURBES D'ÉNERGIE
-# ==========================================================
+
+#  COURBES D'ÉNERGIE
+
 @router.get("/monitoring/{mg_id}/energy-curves")
 async def get_energy_curves(mg_id: int, db: AsyncSession = Depends(get_db)):
     """Retourne les courbes de production/consommation (7 derniers jours)"""
@@ -142,9 +142,9 @@ async def get_energy_curves(mg_id: int, db: AsyncSession = Depends(get_db)):
         })
     return list(reversed(data))
 
-# ==========================================================
-# ⚙️ 4️⃣ RÉPARTITION DE L'ÉNERGIE
-# ==========================================================
+
+# RÉPARTITION DE L'ÉNERGIE
+
 @router.get("/monitoring/{mg_id}/energy-distribution")
 async def get_energy_distribution(mg_id: int):
     """Répartition énergétique simulée"""
@@ -159,9 +159,9 @@ async def get_energy_distribution(mg_id: int):
         p["pourcentage"] = round(p["value"] * 100 / total, 1)
     return parts
 
-# ==========================================================
-# 🛰️ 5️⃣ ÉTAT DES SITES
-# ==========================================================
+
+# ÉTAT DES SITES
+
 @router.get("/monitoring/{mg_id}/sites")
 async def get_sites_status(mg_id: int, db: AsyncSession = Depends(get_db)):
     """Statut simulé des sites liés à une mini-grid"""

@@ -9,12 +9,27 @@ from app.models import MesureMinigrid
 
 router = APIRouter(prefix="/alertes", tags=["alertes"])
 
+
+# ---------- utilitaire: journaliser dans alerte_historique ----------
+async def _log_history(
+    db: AsyncSession,
+    alerte_id: int,
+    action: str,
+    acteur_id: int | None = None,
+    details: str | None = None,
+):
+    h = models.AlerteHistorique(
+        alerte_id=alerte_id,
+        action=action,
+        acteur_id=acteur_id,
+        details=details,
+    )
+    db.add(h)
+    await db.commit()
+
+
 # ---------- Liste avec jointure (nom du minigrid) ----------
-@router.get(
-    "/full",
-    response_model=List[schemas.AlerteMinigridListItem],
-    summary="Liste des alertes avec le nom du minigrid",
-)
+@router.get("/full", response_model=List[schemas.AlerteMinigridListItem])
 async def list_alertes_full(
     minigrid_id: Optional[int] = Query(None),
     db: AsyncSession = Depends(get_db),
@@ -43,21 +58,28 @@ async def list_alertes_full(
 
 # ---------- CRUD de base ----------
 @router.get("/", response_model=List[schemas.AlerteMinigridRead])
-async def list_alertes(minigrid_id: Optional[int] = Query(None), db: AsyncSession = Depends(get_db)):
-    stmt = select(models.AlerteMinigrid).order_by(models.AlerteMinigrid.time_stamp.desc())
+async def list_alertes(
+    minigrid_id: Optional[int] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(models.AlerteMinigrid).order_by(
+        models.AlerteMinigrid.time_stamp.desc()
+    )
     if minigrid_id is not None:
         stmt = stmt.where(models.AlerteMinigrid.minigrid_id == minigrid_id)
     return (await db.execute(stmt)).scalars().all()
 
 
 @router.post("/", response_model=schemas.AlerteMinigridRead)
-async def create_alerte(payload: schemas.AlerteMinigridCreate, db: AsyncSession = Depends(get_db)):
+async def create_alerte(
+    payload: schemas.AlerteMinigridCreate, db: AsyncSession = Depends(get_db)
+):
     obj = models.AlerteMinigrid(**payload.dict(exclude_unset=True))
     db.add(obj)
     await db.commit()
     await db.refresh(obj)
 
-    # Création automatique d'une notification
+    # 🔔 Création automatique d'une notification
     notif_message = f"[{obj.niveau.upper()}] {obj.type_alerte} - {obj.message}"
     notif = models.NotificationMinigrid(
         alerte_id=obj.id,
@@ -69,7 +91,7 @@ async def create_alerte(payload: schemas.AlerteMinigridCreate, db: AsyncSession 
     db.add(notif)
     await db.commit()
 
-    print(f"✅ Notification créée pour l’alerte {obj.id}")
+    await _log_history(db, obj.id, "creation", None, notif_message)
     return obj
 
 
@@ -82,7 +104,11 @@ async def get_alerte(alerte_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.patch("/{alerte_id}", response_model=schemas.AlerteMinigridRead)
-async def update_alerte(alerte_id: int, payload: schemas.AlerteMinigridUpdate, db: AsyncSession = Depends(get_db)):
+async def update_alerte(
+    alerte_id: int,
+    payload: schemas.AlerteMinigridUpdate,
+    db: AsyncSession = Depends(get_db),
+):
     obj = await db.get(models.AlerteMinigrid, alerte_id)
     if not obj:
         raise HTTPException(404, "Alerte introuvable")
@@ -90,6 +116,8 @@ async def update_alerte(alerte_id: int, payload: schemas.AlerteMinigridUpdate, d
         setattr(obj, k, v)
     await db.commit()
     await db.refresh(obj)
+
+    await _log_history(db, obj.id, "statut_change", None, f"statut={obj.statut}")
     return obj
 
 
@@ -122,9 +150,7 @@ async def resolve_alerte(alerte_id: int, db: AsyncSession = Depends(get_db)):
     if not mesure:
         raise HTTPException(404, "Aucune mesure trouvée pour ce mini-grid")
 
-    normal = False
-    reason = ""
-
+    normal, reason = False, ""
     if "tension" in alerte.type_alerte.lower():
         normal = mesure.voltage and mesure.voltage > 210
         reason = f"Tension encore basse ({mesure.voltage} V)" if not normal else ""
@@ -135,23 +161,88 @@ async def resolve_alerte(alerte_id: int, db: AsyncSession = Depends(get_db)):
         normal = mesure.courant and mesure.courant < 40
         reason = f"Courant encore élevé ({mesure.courant} A)" if not normal else ""
     else:
-        normal = True  # alertes manuelles
+        normal = True
 
     if normal:
         alerte.statut = "resolue"
         alerte.time_resolution = datetime.utcnow()
         await db.commit()
         await db.refresh(alerte)
+        await _log_history(db, alerte.id, "resolution", None, "résolution automatique")
         return {
             "message": "✅ Alerte résolue automatiquement",
             "alerte_id": alerte.id,
             "type": alerte.type_alerte,
             "minigrid": alerte.minigrid_id,
-            "mesure_ok": {
-                "voltage": mesure.voltage,
-                "courant": mesure.courant,
-                "temperature": mesure.temperature,
-            },
         }
     else:
         raise HTTPException(status_code=400, detail=f"Impossible de résoudre : {reason}")
+
+
+# ---------- Nouvelles routes avancées ----------
+
+@router.get("/actives", response_model=List[schemas.AlerteMinigridRead])
+async def list_actives(db: AsyncSession = Depends(get_db)):
+    stmt = select(models.AlerteMinigrid).where(models.AlerteMinigrid.statut != "archivee")
+    return (await db.execute(stmt)).scalars().all()
+
+
+@router.get("/stats", response_model=schemas.AlerteStats)
+async def alerte_stats(db: AsyncSession = Depends(get_db)):
+    sql = text("""
+        SELECT
+          COUNT(*)::int AS total,
+          SUM(CASE WHEN niveau = 'crit' THEN 1 ELSE 0 END)::int AS critiques,
+          SUM(CASE WHEN statut = 'resolue' THEN 1 ELSE 0 END)::int AS resolues,
+          AVG(EXTRACT(EPOCH FROM (time_resolution - time_stamp))/3600.0) AS temps_resolution_h
+        FROM alerte_minigrid;
+    """)
+    row = (await db.execute(sql)).mappings().first()
+    return schemas.AlerteStats(**row)
+
+
+@router.get("/{alerte_id}/timeline", response_model=List[schemas.AlerteHistoriqueRead])
+async def alerte_timeline(alerte_id: int, db: AsyncSession = Depends(get_db)):
+    stmt = select(models.AlerteHistorique).where(
+        models.AlerteHistorique.alerte_id == alerte_id
+    ).order_by(models.AlerteHistorique.time_action.asc())
+    return (await db.execute(stmt)).scalars().all()
+
+
+@router.post("/{alerte_id}/comment", response_model=schemas.AlerteMinigridRead)
+async def alerte_add_comment(
+    alerte_id: int, payload: schemas.AlerteCommentPayload, db: AsyncSession = Depends(get_db)
+):
+    alerte = await db.get(models.AlerteMinigrid, alerte_id)
+    if not alerte:
+        raise HTTPException(404, "Alerte introuvable")
+
+    sep = "\n---\n" if alerte.commentaire else ""
+    alerte.commentaire = (alerte.commentaire or "") + f"{sep}{datetime.utcnow().isoformat()} : {payload.commentaire}"
+    await db.commit()
+    await db.refresh(alerte)
+
+    await _log_history(db, alerte_id, "commentaire", None, payload.commentaire)
+    return alerte
+
+
+@router.patch("/{alerte_id}/assign", response_model=schemas.AlerteMinigridRead)
+async def alerte_assign(
+    alerte_id: int, payload: schemas.AlerteAssignPayload, db: AsyncSession = Depends(get_db)
+):
+    alerte = await db.get(models.AlerteMinigrid, alerte_id)
+    if not alerte:
+        raise HTTPException(404, "Alerte introuvable")
+
+    alerte.responsable_id = payload.responsable_id
+    if payload.commentaire:
+        sep = "\n---\n" if alerte.commentaire else ""
+        alerte.commentaire = (alerte.commentaire or "") + f"{sep}{datetime.utcnow().isoformat()} : {payload.commentaire}"
+
+    if alerte.statut == "active":
+        alerte.statut = "en_traitement"
+
+    await db.commit()
+    await db.refresh(alerte)
+    await _log_history(db, alerte_id, "assignation", payload.responsable_id, f"assigné à {payload.responsable_id}")
+    return alerte
