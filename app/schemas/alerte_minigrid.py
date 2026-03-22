@@ -1,30 +1,38 @@
 # app/schemas/alerte_minigrid.py
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
-# ---------- Modèles CRUD standards ----------
+
+# ---------- Modèle de base ----------
 class AlerteMinigridBase(BaseModel):
     minigrid_id: Optional[int] = None
     type_alerte: Optional[str] = None
     niveau: Optional[str] = None
     message: Optional[str] = None
+    statut: Optional[str] = None
     time_stamp: Optional[datetime] = None
+    time_resolution: Optional[datetime] = None
 
+
+# ---------- Création ----------
 class AlerteMinigridCreate(AlerteMinigridBase):
     pass
 
+
+# ---------- Mise à jour ----------
 class AlerteMinigridUpdate(AlerteMinigridBase):
     pass
 
+
+# ---------- Lecture ----------
 class AlerteMinigridRead(AlerteMinigridBase):
     id: int
 
-    class Config:
-        orm_mode = True  # nécessaire avec Pydantic v1 pour sérialiser des objets SQLAlchemy
+    model_config = ConfigDict(from_attributes=True)
 
 
-# ---------- Modèle pour l’endpoint /alertes/full (avec nom de minigrid) ----------
+# ---------- Liste enrichie avec nom du minigrid ----------
 class AlerteMinigridListItem(BaseModel):
     id: int
     minigrid_id: int
@@ -32,4 +40,6 @@ class AlerteMinigridListItem(BaseModel):
     type_alerte: Optional[str] = None
     niveau: Optional[str] = None
     message: Optional[str] = None
+    statut: Optional[str] = None
     time_stamp: Optional[datetime] = None
+    time_resolution: Optional[datetime] = None

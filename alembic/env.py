@@ -3,7 +3,7 @@ from sqlalchemy import engine_from_config, pool
 from alembic import context
 import os
 import sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'app')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from app.db import Base
 from app.models import *
 

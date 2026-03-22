@@ -7,11 +7,11 @@ from .routers import (
     alerte_minigrid, maintenance_ticket,
     statistique, utilisateur, parametre,
     notification_minigrid, simulation, monitoring,
-    auth  )
+    auth, minigrid_history
+)
 
 app = FastAPI(title="Écosystème Mini-Grid API", version="1.0.0")
 
-# --- Middleware CORS ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -19,19 +19,19 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        # à remplacer plus tard par ton vrai lien Vercel
+        # "https://ton-frontend.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Liste des routes (debug) ---
 @app.get("/__routes", tags=["debug"], include_in_schema=False)
 def list_routes():
     return [{"path": getattr(r, "path", None), "methods": list(getattr(r, "methods", []))} for r in app.router.routes]
 
-# --- Inclusion des routers ---
-app.include_router(auth.router)  
+app.include_router(auth.router)
 app.include_router(health.router)
 app.include_router(projet.router)
 app.include_router(site.router)
@@ -46,8 +46,7 @@ app.include_router(parametre.router)
 app.include_router(notification_minigrid.router)
 app.include_router(simulation.router)
 app.include_router(monitoring.router)
-
-from .routers import auth  
+app.include_router(minigrid_history.router)
 
 @app.get("/")
 def root():

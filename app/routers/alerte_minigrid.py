@@ -1,13 +1,17 @@
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from ..db import get_db
 from .. import models, schemas
 from app.models import MesureMinigrid
+from app.services.maintenance_auto_service import MaintenanceAutoService
 
 router = APIRouter(prefix="/alertes", tags=["alertes"])
+
 
 # ---------- Liste avec jointure (nom du minigrid) ----------
 @router.get(
@@ -43,7 +47,10 @@ async def list_alertes_full(
 
 # ---------- CRUD de base ----------
 @router.get("/", response_model=List[schemas.AlerteMinigridRead])
-async def list_alertes(minigrid_id: Optional[int] = Query(None), db: AsyncSession = Depends(get_db)):
+async def list_alertes(
+    minigrid_id: Optional[int] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
     stmt = select(models.AlerteMinigrid).order_by(models.AlerteMinigrid.time_stamp.desc())
     if minigrid_id is not None:
         stmt = stmt.where(models.AlerteMinigrid.minigrid_id == minigrid_id)
@@ -51,14 +58,25 @@ async def list_alertes(minigrid_id: Optional[int] = Query(None), db: AsyncSessio
 
 
 @router.post("/", response_model=schemas.AlerteMinigridRead)
-async def create_alerte(payload: schemas.AlerteMinigridCreate, db: AsyncSession = Depends(get_db)):
-    obj = models.AlerteMinigrid(**payload.dict(exclude_unset=True))
+async def create_alerte(
+    payload: schemas.AlerteMinigridCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    data = payload.dict(exclude_unset=True)
+
+    if not data.get("time_stamp"):
+        data["time_stamp"] = datetime.now(timezone.utc)
+
+    if not data.get("statut"):
+        data["statut"] = "active"
+
+    obj = models.AlerteMinigrid(**data)
     db.add(obj)
     await db.commit()
     await db.refresh(obj)
 
     # Création automatique d'une notification
-    notif_message = f"[{obj.niveau.upper()}] {obj.type_alerte} - {obj.message}"
+    notif_message = f"[{(obj.niveau or '').upper()}] {obj.type_alerte} - {obj.message}"
     notif = models.NotificationMinigrid(
         alerte_id=obj.id,
         message=notif_message,
@@ -69,35 +87,62 @@ async def create_alerte(payload: schemas.AlerteMinigridCreate, db: AsyncSession 
     db.add(notif)
     await db.commit()
 
+    # Création automatique d'un ticket maintenance si nécessaire
+    try:
+        ticket = await MaintenanceAutoService.create_ticket_from_alert(db, obj)
+        if ticket:
+            print(
+                f"✅ Ticket maintenance créé automatiquement pour l’alerte {obj.id} -> ticket #{ticket.id}"
+            )
+        else:
+            print(f"ℹ️ Aucun ticket maintenance créé pour l’alerte {obj.id}")
+    except Exception as e:
+        print(
+            f"⚠️ Erreur création automatique ticket maintenance pour alerte {obj.id}: {e}"
+        )
+
     print(f"✅ Notification créée pour l’alerte {obj.id}")
     return obj
 
 
 @router.get("/{alerte_id}", response_model=schemas.AlerteMinigridRead)
-async def get_alerte(alerte_id: int, db: AsyncSession = Depends(get_db)):
+async def get_alerte(
+    alerte_id: int,
+    db: AsyncSession = Depends(get_db),
+):
     obj = await db.get(models.AlerteMinigrid, alerte_id)
     if not obj:
-        raise HTTPException(404, "Alerte introuvable")
+        raise HTTPException(status_code=404, detail="Alerte introuvable")
     return obj
 
 
 @router.patch("/{alerte_id}", response_model=schemas.AlerteMinigridRead)
-async def update_alerte(alerte_id: int, payload: schemas.AlerteMinigridUpdate, db: AsyncSession = Depends(get_db)):
+async def update_alerte(
+    alerte_id: int,
+    payload: schemas.AlerteMinigridUpdate,
+    db: AsyncSession = Depends(get_db),
+):
     obj = await db.get(models.AlerteMinigrid, alerte_id)
     if not obj:
-        raise HTTPException(404, "Alerte introuvable")
+        raise HTTPException(status_code=404, detail="Alerte introuvable")
+
     for k, v in payload.dict(exclude_unset=True).items():
         setattr(obj, k, v)
+
     await db.commit()
     await db.refresh(obj)
     return obj
 
 
 @router.delete("/{alerte_id}")
-async def delete_alerte(alerte_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_alerte(
+    alerte_id: int,
+    db: AsyncSession = Depends(get_db),
+):
     obj = await db.get(models.AlerteMinigrid, alerte_id)
     if not obj:
-        raise HTTPException(404, "Alerte introuvable")
+        raise HTTPException(status_code=404, detail="Alerte introuvable")
+
     await db.delete(obj)
     await db.commit()
     return {"deleted": alerte_id}
@@ -105,12 +150,15 @@ async def delete_alerte(alerte_id: int, db: AsyncSession = Depends(get_db)):
 
 # ---------- Route intelligente de résolution ----------
 @router.patch("/{alerte_id}/resolve", summary="Résoudre une alerte si les mesures sont normales")
-async def resolve_alerte(alerte_id: int, db: AsyncSession = Depends(get_db)):
+async def resolve_alerte(
+    alerte_id: int,
+    db: AsyncSession = Depends(get_db),
+):
     """Analyse la dernière mesure du mini-grid associé et résout l’alerte si les valeurs sont normales."""
 
     alerte = await db.get(models.AlerteMinigrid, alerte_id)
     if not alerte:
-        raise HTTPException(404, "Alerte introuvable")
+        raise HTTPException(status_code=404, detail="Alerte introuvable")
 
     result = await db.execute(
         select(MesureMinigrid)
@@ -119,29 +167,36 @@ async def resolve_alerte(alerte_id: int, db: AsyncSession = Depends(get_db)):
         .limit(1)
     )
     mesure = result.scalar_one_or_none()
+
     if not mesure:
-        raise HTTPException(404, "Aucune mesure trouvée pour ce mini-grid")
+        raise HTTPException(status_code=404, detail="Aucune mesure trouvée pour ce mini-grid")
 
     normal = False
     reason = ""
 
-    if "tension" in alerte.type_alerte.lower():
-        normal = mesure.voltage and mesure.voltage > 210
+    type_alerte = (alerte.type_alerte or "").lower()
+
+    if "tension" in type_alerte:
+        normal = bool(mesure.voltage and mesure.voltage > 210)
         reason = f"Tension encore basse ({mesure.voltage} V)" if not normal else ""
-    elif "température" in alerte.type_alerte.lower():
-        normal = mesure.temperature and mesure.temperature < 45
+
+    elif "température" in type_alerte or "temperature" in type_alerte:
+        normal = bool(mesure.temperature and mesure.temperature < 45)
         reason = f"Température toujours élevée ({mesure.temperature} °C)" if not normal else ""
-    elif "surcharge" in alerte.type_alerte.lower():
-        normal = mesure.courant and mesure.courant < 40
+
+    elif "surcharge" in type_alerte:
+        normal = bool(mesure.courant and mesure.courant < 40)
         reason = f"Courant encore élevé ({mesure.courant} A)" if not normal else ""
+
     else:
-        normal = True  # alertes manuelles
+        normal = True  # alertes manuelles ou non mesurées automatiquement
 
     if normal:
         alerte.statut = "resolue"
-        alerte.time_resolution = datetime.utcnow()
+        alerte.time_resolution = datetime.now(timezone.utc)
         await db.commit()
         await db.refresh(alerte)
+
         return {
             "message": "✅ Alerte résolue automatiquement",
             "alerte_id": alerte.id,
@@ -153,5 +208,5 @@ async def resolve_alerte(alerte_id: int, db: AsyncSession = Depends(get_db)):
                 "temperature": mesure.temperature,
             },
         }
-    else:
-        raise HTTPException(status_code=400, detail=f"Impossible de résoudre : {reason}")
+
+    raise HTTPException(status_code=400, detail=f"Impossible de résoudre : {reason}")
