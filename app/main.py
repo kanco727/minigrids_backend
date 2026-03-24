@@ -1,4 +1,3 @@
-# app/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .routers import (
@@ -12,15 +11,18 @@ from .routers import (
 
 app = FastAPI(title="Écosystème Mini-Grid API", version="1.0.0")
 
-app.add_middleware(
-    CORSMiddleware,
-   allow_origins=[
+origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "https://frontend-solarpro-1.vercel.app",
-],
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
