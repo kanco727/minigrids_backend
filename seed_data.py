@@ -21,13 +21,14 @@ from app.models.statistique import Statistique
 
 async def seed():
     async with AsyncSessionLocal() as db:
-        existing_user = await db.execute(select(Utilisateur).limit(1))
-        if existing_user.scalar_one_or_none():
-            print("Des données existent déjà. Seed annulé.")
+        existing_site = await db.execute(select(Site).limit(1))
+        existing_minigrid = await db.execute(select(MiniGrid).limit(1))
+
+        if existing_site.scalar_one_or_none() or existing_minigrid.scalar_one_or_none():
+            print("Des données de démonstration existent déjà. Seed annulé.")
             return
 
         now = datetime.now(timezone.utc)
-
         # =========================
         # Paramètres plateforme
         # =========================

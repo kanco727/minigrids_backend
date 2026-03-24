@@ -10,8 +10,14 @@ class NotificationMinigrid(Base):
     message = Column(Text, nullable=False)
     type = Column(Text, nullable=True)  # ex: "alerte", "rapport", "maintenance"
     destinataire = Column(Text, nullable=True)  # ex: "admin", "technicien"
-    est_lu = Column(Boolean, default=False)
+
+    est_lu = Column(Boolean, default=False, nullable=False)
+    est_archivee = Column(Boolean, default=False, nullable=False)
     cree_le = Column(DateTime(timezone=True), server_default=func.now())
+    archivee_le = Column(DateTime(timezone=True), nullable=True)
 
     def __repr__(self):
-        return f"<Notification(id={self.id}, type='{self.type}', lu={self.est_lu})>"
+        return (
+            f"<Notification(id={self.id}, type='{self.type}', "
+            f"lu={self.est_lu}, archivee={self.est_archivee})>"
+        )
